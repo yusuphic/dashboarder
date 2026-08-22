@@ -1,0 +1,48 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agent Performance Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+:root{--bg:#080b10;--p:#10151d;--p2:#151c26;--line:#27303c;--txt:#edf2f7;--muted:#8995a5;--accent:#78aefc;--red:#ff6675;--green:#55d6a2}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top,#111a26,#080b10 50%);color:var(--txt);font:13px system-ui,-apple-system,Segoe UI,sans-serif}.wrap{max-width:1500px;margin:auto;padding:22px}
+.top,.head,.agenthead{display:flex;align-items:center;justify-content:space-between;gap:12px}h1{font-size:22px;margin:0}h2{font-size:14px;margin:0}.muted{color:var(--muted)}.controls{display:grid;grid-template-columns:1fr 1fr 1.5fr auto;gap:9px;margin:16px 0;background:#0f141c;border:1px solid var(--line);padding:10px;border-radius:13px}
+input,select,button{background:#0b1017;color:var(--txt);border:1px solid var(--line);border-radius:9px;padding:10px;outline:0}button{cursor:pointer;background:#182232}.cards{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:16px}.card,.panel{background:rgba(16,21,29,.94);border:1px solid var(--line);border-radius:13px}.card{padding:13px}.label{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.08em}.value{font-size:21px;font-weight:750;margin-top:4px}
+.panel{overflow:hidden;margin-bottom:16px}.head{padding:12px 14px;border-bottom:1px solid var(--line)}.scroll{overflow:auto;max-height:440px}table{width:100%;border-collapse:collapse;white-space:nowrap}th,td{padding:9px 11px;border-bottom:1px solid #202731;text-align:left}th{position:sticky;top:0;background:#141b24;color:#aeb9c7;font-size:10px;text-transform:uppercase;z-index:2}td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}tbody tr:hover td{background:#131b25}.bad{color:var(--red)!important;background:rgba(255,102,117,.09)!important;font-weight:700}.agent{padding:14px}.agentname{font-size:18px;font-weight:750}.badge{padding:5px 8px;border-radius:99px;background:#182536;color:#b9d4fa;font-size:11px}.crumb{margin:4px 0 14px;color:var(--muted)}.empty{padding:30px;text-align:center;color:var(--muted)}
+@media(max-width:900px){.controls{grid-template-columns:1fr 1fr}.cards{grid-template-columns:repeat(2,1fr)}}@media(max-width:600px){.wrap{padding:12px}.controls{grid-template-columns:1fr}}
+</style></head>
+<body><div class="wrap">
+<div class="top"><div><h1>Agent Performance Dashboard</h1><div class="muted">CR / SOP / AHT • Daily, Weekly & Monthly</div></div><input id="file" type="file" accept=".xlsx,.xls,.csv"></div>
+<div class="controls"><select id="spv"><option value="">ALL SUPERVISORS</option></select><select id="tl"><option value="">ALL TEAM LEADERS</option></select><input id="q" placeholder="Search agent name, email or HR ID…"><button id="reset">Reset</button></div>
+<div class="crumb">SUPERVISOR — <b id="sv">ALL</b> → TEAMLEADER — <b id="tv">ALL</b></div>
+<div id="cards" class="cards"></div>
+<div class="panel"><div class="head"><h2>Agent Performance</h2><span class="muted" id="count"></span></div><div class="scroll"><table id="tbl"></table></div></div>
+<div id="detail"></div></div>
+<script>
+let DATA=[];
+const $=x=>document.getElementById(x), pct=v=>v==null?'—':(v*100).toFixed(1)+'%', aht=v=>v==null?'—':Number(v).toFixed(0);
+const bad=(k,v)=>v!=null&&((k==='cr'&&v<.90)||(k==='sop'&&v<.95)||(k==='aht'&&v>250))?'bad':'';
+const esc=v=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+function latest(a){let d=Object.keys(a.daily||{}).sort().pop();return d?(a.daily[d]||{}):{}}
+function fill(){let s=[...new Set(DATA.map(x=>x.spv).filter(Boolean))].sort();$('spv').innerHTML='<option value="">ALL SUPERVISORS</option>'+s.map(x=>`<option>${esc(x)}</option>`).join('');tls();}
+function tls(){let s=$('spv').value,t=[...new Set(DATA.filter(x=>!s||x.spv===s).map(x=>x.tl).filter(Boolean))].sort();$('tl').innerHTML='<option value="">ALL TEAM LEADERS</option>'+t.map(x=>`<option>${esc(x)}</option>`).join('');render();}
+function rows(){let s=$('spv').value,t=$('tl').value,q=$('q').value.toLowerCase();return DATA.filter(a=>(!s||a.spv===s)&&(!t||a.tl===t)&&(!q||[a.name,a.email,a.hrid,a.tl,a.spv].join(' ').toLowerCase().includes(q)))}
+function render(){let rs=rows();$('sv').textContent=$('spv').value||'ALL';$('tv').textContent=$('tl').value||'ALL';$('count').textContent=rs.length+' agents';
+let av=k=>{let z=rs.map(a=>latest(a)[k]).filter(v=>v!=null);return z.length?z.reduce((x,y)=>x+y,0)/z.length:null};
+$('cards').innerHTML=[['Agents',rs.length,''],['Latest CR',pct(av('cr')),'cr'],['Latest SOP',pct(av('sop')),'sop'],['Latest AHT',aht(av('aht')),'aht'],['Data through',rs.flatMap(a=>Object.keys(a.daily||{})).sort().pop()||'—','']].map(x=>`<div class="card"><div class="label">${x[0]}</div><div class="value ${bad(x[2],x[2]?av(x[2]):null)}">${x[1]}</div></div>`).join('');
+let h='<thead><tr><th>Agent</th><th>Supervisor</th><th>Teamleader</th><th class="num">Daily CR</th><th class="num">Daily SOP</th><th class="num">Daily AHT</th><th class="num">MTD CR</th><th class="num">MTD SOP</th><th class="num">MTD AHT</th></tr></thead><tbody>';
+rs.forEach((x,i)=>{let d=latest(x),w=x.weekly||{},cr=w.cr?.[4],sp=w.sop?.[4],ah=w.aht?.[4];h+=`<tr data-i="${i}"><td><b>${esc(x.name)}</b><div class="muted">${esc(x.hrid)}</div></td><td>${esc(x.spv)}</td><td>${esc(x.tl)}</td><td class="num ${bad('cr',d.cr)}">${pct(d.cr)}</td><td class="num ${bad('sop',d.sop)}">${pct(d.sop)}</td><td class="num ${bad('aht',d.aht)}">${aht(d.aht)}</td><td class="num ${bad('cr',cr)}">${pct(cr)}</td><td class="num ${bad('sop',sp)}">${pct(sp)}</td><td class="num ${bad('aht',ah)}">${aht(ah)}</td></tr>`});h+='</tbody>';$('tbl').innerHTML=h;
+document.querySelectorAll('#tbl tbody tr').forEach(r=>r.onclick=()=>show(rs[+r.dataset.i]));if(rs.length===1)show(rs[0]);else $('detail').innerHTML='';}
+function show(a){let d=Object.keys(a.daily||{}).sort().reverse(),w=a.weekly||{},h=`<div class="panel agent"><div class="agenthead"><div><div class="agentname">${esc(a.name)}</div><div class="muted">SUPERVISOR — ${esc(a.spv)} → TEAMLEADER — ${esc(a.tl)} → AGENT — ${esc(a.name)}</div></div><span class="badge">${esc(a.hrid)}</span></div></div>`;
+h+=`<div class="panel"><div class="head"><h2>Daily Performance</h2><span class="muted">${d.length} days</span></div><div class="scroll"><table><thead><tr><th>Date</th><th class="num">CR%</th><th class="num">SOP%</th><th class="num">AHT</th></tr></thead><tbody>`;d.forEach(day=>{let x=a.daily[day]||{};h+=`<tr><td>${day}</td><td class="num ${bad('cr',x.cr)}">${pct(x.cr)}</td><td class="num ${bad('sop',x.sop)}">${pct(x.sop)}</td><td class="num ${bad('aht',x.aht)}">${aht(x.aht)}</td></tr>`});h+='</tbody></table></div></div>';
+h+=`<div class="panel"><div class="head"><h2>Weekly / Monthly Performance</h2><span class="muted">MTD = monthly to date</span></div><div class="scroll"><table><thead><tr><th>Metric</th><th class="num">Week 1</th><th class="num">Week 2</th><th class="num">Week 3</th><th class="num">Week 4</th><th class="num">MTD</th></tr></thead><tbody>`;
+[['CR%',w.cr,'cr'],['SOP%',w.sop,'sop'],['AHT',w.aht,'aht']].forEach(r=>{h+=`<tr><td><b>${r[0]}</b></td>`+(r[1]||[]).map(v=>`<td class="num ${bad(r[2],v)}">${r[2]==='aht'?aht(v):pct(v)}</td>`).join('')+'</tr>'});h+='</tbody></table></div></div>';$('detail').innerHTML=h}
+$('spv').onchange=tls;$('tl').onchange=render;$('q').oninput=render;$('reset').onclick=()=>{$('q').value='';$('spv').value='';fill()};
+function parse(wb){let S=n=>wb.Sheets[n]?XLSX.utils.sheet_to_json(wb.Sheets[n],{defval:null}):[];let O={};
+function daily(name,k){let rs=S(name);rs.forEach(r=>{let email=String(r.Email??r['Email']??'').trim();if(!email)return;let a=O[email]||(O[email]={hrid:String(r['HR ID']??''),name:String(r['Full Name']??''),email,tl:String(r.TL??''),spv:String(r.SPV??''),daily:{},weekly:{}});Object.keys(r).slice(5).forEach(c=>{let dt=new Date(c),v=Number(r[c]);if(!isNaN(dt)&&isFinite(v))a.daily[dt.toISOString().slice(0,10)]=a.daily[dt.toISOString().slice(0,10)]||{},a.daily[dt.toISOString().slice(0,10)][k]=v})})}
+daily('Agents View - CR - DOD','cr');daily('Agents View - SOP - DOD','sop');daily('Agents - AHT - DOD','aht');
+function week(name,key,idx){let rs=S(name);rs.forEach(r=>{let e=String(r.Email??'').trim();if(!O[e])return;O[e].weekly[key]=idx.map(i=>{let v=Number(r[Object.keys(r)[i]]);return isFinite(v)?v:null})})} 
+week('Agents - CR&SOP -  WOW & MTD','cr',[5,6,7,8,9]);week('Agents - CR&SOP -  WOW & MTD','sop',[11,12,13,14,15]);week('Agents - AHT -  WOW & MTD','aht',[5,6,7,8,9]);return Object.values(O)}
+$('file').onchange=async e=>{let f=e.target.files[0];if(!f)return;let wb=XLSX.read(await f.arrayBuffer(),{type:'array',cellDates:true});DATA=parse(wb);fill()};
+$('detail').innerHTML='<div class="panel empty">Upload an Excel or CSV file to begin.</div>';
+$('cards').innerHTML='';$('tbl').innerHTML='';$('count').textContent='';
+</script></body></html>
