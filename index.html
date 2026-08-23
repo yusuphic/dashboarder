@@ -1,0 +1,295 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agent Performance Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+:root{--bg:#080b10;--p:#10151d;--p2:#151c26;--line:#27303c;--txt:#edf2f7;--muted:#8995a5;--accent:#78aefc;--red:#ff6675;--green:#55d6a2}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top,#111a26,#080b10 50%);color:var(--txt);font:13px system-ui,-apple-system,Segoe UI,sans-serif}.wrap{max-width:1500px;margin:auto;padding:22px}
+.top,.head,.agenthead{display:flex;align-items:center;justify-content:space-between;gap:12px}h1{font-size:22px;margin:0}h2{font-size:14px;margin:0}.muted{color:var(--muted)}.controls{display:grid;grid-template-columns:1fr 1fr 1.5fr auto;gap:9px;margin:16px 0;background:#0f141c;border:1px solid var(--line);padding:10px;border-radius:13px}
+input,select,button{background:#0b1017;color:var(--txt);border:1px solid var(--line);border-radius:9px;padding:10px;outline:0}button{cursor:pointer;background:#182232}.cards{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:16px}.card,.panel{background:rgba(16,21,29,.94);border:1px solid var(--line);border-radius:13px}.card{padding:13px}.label{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.08em}.value{font-size:21px;font-weight:750;margin-top:4px}
+.panel{overflow:hidden;margin-bottom:16px}.head{padding:12px 14px;border-bottom:1px solid var(--line)}.scroll{overflow:auto;max-height:440px}table{width:100%;border-collapse:collapse;white-space:nowrap}th,td{padding:9px 11px;border-bottom:1px solid #202731;text-align:left}th{position:sticky;top:0;background:#141b24;color:#aeb9c7;font-size:10px;text-transform:uppercase;z-index:2}td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}tbody tr:hover td{background:#131b25}.bad{color:var(--red)!important;background:rgba(255,102,117,.09)!important;font-weight:700}.agent{padding:14px}.agentname{font-size:18px;font-weight:750}.badge{padding:5px 8px;border-radius:99px;background:#182536;color:#b9d4fa;font-size:11px}.crumb{margin:4px 0 14px;color:var(--muted)}.empty{padding:30px;text-align:center;color:var(--muted)}
+@media(max-width:900px){.controls{grid-template-columns:1fr 1fr}.cards{grid-template-columns:repeat(2,1fr)}}@media(max-width:600px){.wrap{padding:12px}.controls{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+    <div class="top">
+        <div>
+            <h1>Agent Performance Dashboard</h1>
+            <div class="muted">CR / SOP / AHT • Daily, Weekly & Monthly</div>
+        </div>
+        <input id="file" type="file" accept=".xlsx,.xls,.csv">
+    </div>
+    
+    <div class="controls">
+        <select id="spv"><option value="">ALL SUPERVISORS</option></select>
+        <select id="tl"><option value="">ALL TEAM LEADERS</option></select>
+        <input id="q" placeholder="Search agent name, email or HR ID…">
+        <button id="reset">Reset</button>
+    </div>
+
+    <div class="crumb">SUPERVISOR — <b id="sv">ALL</b> → TEAMLEADER — <b id="tv">ALL</b></div>
+    
+    <div id="cards" class="cards"></div>
+    
+    <div class="panel">
+        <div class="head">
+            <h2>Agent Performance</h2>
+            <span class="muted" id="count"></span>
+        </div>
+        <div class="scroll">
+            <table id="tbl"></table>
+        </div>
+    </div>
+    
+    <div id="detail"></div>
+</div>
+
+<script>
+let DATA = [];
+const $ = x => document.getElementById(x);
+const pct = v => v == null ? '—' : (v * 100).toFixed(1) + '%';
+const aht = v => v == null ? '—' : Number(v).toFixed(0);
+const bad = (k, v) => v != null && ((k === 'cr' && v < 0.90) || (k === 'sop' && v < 0.95) || (k === 'aht' && v > 250)) ? 'bad' : '';
+const esc = v => String(v ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+
+function sanitizeHierarchy(val) {
+    let s = String(val || '').trim();
+    if (!s || s === '-' || s === 'nan' || s === 'undefined') {
+        return 'Terminated & Other';
+    }
+    return s;
+}
+
+function latest(a) {
+    let d = Object.keys(a.daily || {}).sort().pop();
+    return d ? (a.daily[d] || {}) : {};
+}
+
+function getMonthlyWeekKey(dateStr) {
+    let d = new Date(dateStr);
+    let day = d.getDate();
+    let weekNum = Math.ceil(day / 7);
+    let yearMonth = dateStr.slice(0, 7);
+    return `${yearMonth} - Week ${weekNum}`;
+}
+
+function getMonthKey(dateStr) {
+    return dateStr.slice(0, 7);
+}
+
+function fill() {
+    let s = [...new Set(DATA.map(x => x.spv).filter(v => v !== 'Terminated & Other'))].sort();
+    $('spv').innerHTML = '<option value="">ALL SUPERVISORS</option>' + s.map(x => `<option>${esc(x)}</option>`).join('');
+    tls();
+}
+
+function tls() {
+    let s = $('spv').value;
+    let t = [...new Set(DATA.filter(x => (!s || x.spv === s) && x.tl !== 'Terminated & Other').map(x => x.tl).filter(Boolean))].sort();
+    $('tl').innerHTML = '<option value="">ALL TEAM LEADERS</option>' + t.map(x => `<option>${esc(x)}</option>`).join('');
+    render();
+}
+
+function rows() {
+    let s = $('spv').value, t = $('tl').value, q = $('q').value.toLowerCase();
+    return DATA.filter(a => {
+        // Exclude Terminated & Other by default from active dashboard counts and rows
+        if (a.spv === 'Terminated & Other' || a.tl === 'Terminated & Other') {
+            // Only include them if explicitly searched for via query string
+            if (!q || ![a.name, a.email, a.hrid, a.tl, a.spv].join(' ').toLowerCase().includes(q)) {
+                return false;
+            }
+        }
+        return (!s || a.spv === s) && (!t || a.tl === t) && (!q || [a.name, a.email, a.hrid, a.tl, a.spv].join(' ').toLowerCase().includes(q));
+    });
+}
+
+function render() {
+    let rs = rows();
+    $('sv').textContent = $('spv').value || 'ALL';
+    $('tv').textContent = $('tl').value || 'ALL';
+    $('count').textContent = rs.length + ' agents';
+
+    let av = k => {
+        let z = rs.map(a => latest(a)[k]).filter(v => v != null);
+        return z.length ? z.reduce((x, y) => x + y, 0) / z.length : null;
+    };
+
+    $('cards').innerHTML = [
+        ['Agents', rs.length, ''],
+        ['Latest CR', pct(av('cr')), 'cr'],
+        ['Latest SOP', pct(av('sop')), 'sop'],
+        ['Latest AHT', aht(av('aht')), 'aht'],
+        ['Data through', rs.flatMap(a => Object.keys(a.daily || {})).sort().pop() || '—', '']
+    ].map(x => `<div class="card"><div class="label">${x[0]}</div><div class="value ${bad(x[2], x[2] ? av(x[2]) : null)}">${x[1]}</div></div>`).join('');
+
+    let h = '<thead><tr><th>Agent</th><th>Supervisor</th><th>Teamleader</th><th class="num">Daily CR</th><th class="num">Daily SOP</th><th class="num">Daily AHT</th><th class="num">MTD CR</th><th class="num">MTD SOP</th><th class="num">MTD AHT</th></tr></thead><tbody>';
+    
+    rs.forEach((x, i) => {
+        let d = latest(x);
+        let days = Object.values(x.daily || {});
+        let mtdCr = days.length ? days.reduce((acc, cur) => acc + (cur.cr || 0), 0) / days.length : null;
+        let mtdSop = days.length ? days.reduce((acc, cur) => acc + (cur.sop || 0), 0) / days.length : null;
+        let mtdAht = days.length ? days.reduce((acc, cur) => acc + (cur.aht || 0), 0) / days.length : null;
+
+        h += `<tr data-i="${i}">
+            <td><b>${esc(x.name)}</b><div class="muted">${esc(x.hrid)}</div></td>
+            <td>${esc(x.spv)}</td>
+            <td>${esc(x.tl)}</td>
+            <td class="num ${bad('cr', d.cr)}">${pct(d.cr)}</td>
+            <td class="num ${bad('sop', d.sop)}">${pct(d.sop)}</td>
+            <td class="num ${bad('aht', d.aht)}">${aht(d.aht)}</td>
+            <td class="num ${bad('cr', mtdCr)}">${pct(mtdCr)}</td>
+            <td class="num ${bad('sop', mtdSop)}">${pct(mtdSop)}</td>
+            <td class="num ${bad('aht', mtdAht)}">${aht(mtdAht)}</td>
+        </tr>`;
+    });
+    h += '</tbody>';
+    $('tbl').innerHTML = h;
+    
+    document.querySelectorAll('#tbl tbody tr').forEach(r => r.onclick = () => show(rs[+r.dataset.i]));
+    if (rs.length === 1) show(rs[0]); else $('detail').innerHTML = '';
+}
+
+function show(a) {
+    let dates = Object.keys(a.daily || {}).sort().reverse();
+    
+    let weeksMap = {};
+    Object.entries(a.daily || {}).forEach(([dt, vals]) => {
+        let wk = getMonthlyWeekKey(dt);
+        if(!weeksMap[wk]) weeksMap[wk] = {cr:[], sop:[], aht:[]};
+        if(vals.cr != null) weeksMap[wk].cr.push(vals.cr);
+        if(vals.sop != null) weeksMap[wk].sop.push(vals.sop);
+        if(vals.aht != null) weeksMap[wk].aht.push(vals.aht);
+    });
+    let sortedWeeks = Object.keys(weeksMap).sort().reverse();
+
+    let monthsMap = {};
+    Object.entries(a.daily || {}).forEach(([dt, vals]) => {
+        let mo = getMonthKey(dt);
+        if(!monthsMap[mo]) monthsMap[mo] = {cr:[], sop:[], aht:[]};
+        if(vals.cr != null) monthsMap[mo].cr.push(vals.cr);
+        if(vals.sop != null) monthsMap[mo].sop.push(vals.sop);
+        if(vals.aht != null) monthsMap[mo].aht.push(vals.aht);
+    });
+    let sortedMonths = Object.keys(monthsMap).sort().reverse();
+
+    let h = `<div class="panel agent"><div class="agenthead"><div><div class="agentname">${esc(a.name)}</div><div class="muted">SUPERVISOR — ${esc(a.spv)} → TEAMLEADER — ${esc(a.tl)} → AGENT — ${esc(a.name)}</div></div><span class="badge">${esc(a.hrid)}</span></div></div>`;
+    
+    h += `<div class="panel"><div class="head"><h2>Weekly Performance (By Month)</h2><span class="muted">${sortedWeeks.length} periods</span></div><div class="scroll"><table><thead><tr><th>Period</th><th class="num">Avg CR%</th><th class="num">Avg SOP%</th><th class="num">Avg AHT</th></tr></thead><tbody>`;
+    sortedWeeks.forEach(wk => {
+        let w = weeksMap[wk];
+        let avgCr = w.cr.length ? w.cr.reduce((x,y)=>x+y,0)/w.cr.length : null;
+        let avgSop = w.sop.length ? w.sop.reduce((x,y)=>x+y,0)/w.sop.length : null;
+        let avgAht = w.aht.length ? w.aht.reduce((x,y)=>x+y,0)/w.aht.length : null;
+        h += `<tr><td>${wk}</td><td class="num ${bad('cr', avgCr)}">${pct(avgCr)}</td><td class="num ${bad('sop', avgSop)}">${pct(avgSop)}</td><td class="num ${bad('aht', avgAht)}">${aht(avgAht)}</td></tr>`;
+    });
+    h += '</tbody></table></div></div>';
+
+    h += `<div class="panel"><div class="head"><h2>Monthly Performance</h2><span class="muted">${sortedMonths.length} months</span></div><div class="scroll"><table><thead><tr><th>Month</th><th class="num">Avg CR%</th><th class="num">Avg SOP%</th><th class="num">Avg AHT</th></tr></thead><tbody>`;
+    sortedMonths.forEach(mo => {
+        let m = monthsMap[mo];
+        let avgCr = m.cr.length ? m.cr.reduce((x,y)=>x+y,0)/m.cr.length : null;
+        let avgSop = m.sop.length ? m.sop.reduce((x,y)=>x+y,0)/m.sop.length : null;
+        let avgAht = m.aht.length ? m.aht.reduce((x,y)=>x+y,0)/m.aht.length : null;
+        h += `<tr><td>${mo}</td><td class="num ${bad('cr', avgCr)}">${pct(avgCr)}</td><td class="num ${bad('sop', avgSop)}">${pct(avgSop)}</td><td class="num ${bad('aht', avgAht)}">${aht(avgAht)}</td></tr>`;
+    });
+    h += '</tbody></table></div></div>';
+
+    h += `<div class="panel"><div class="head"><h2>Daily Performance</h2><span class="muted">${dates.length} days</span></div><div class="scroll"><table><thead><tr><th>Date</th><th class="num">CR%</th><th class="num">SOP%</th><th class="num">AHT</th></tr></thead><tbody>`;
+    dates.forEach(day => {
+        let x = a.daily[day] || {};
+        h += `<tr><td>${day}</td><td class="num ${bad('cr', x.cr)}">${pct(x.cr)}</td><td class="num ${bad('sop', x.sop)}">${pct(x.sop)}</td><td class="num ${bad('aht', x.aht)}">${aht(x.aht)}</td></tr>`;
+    });
+    h += '</tbody></table></div></div>';
+
+    $('detail').innerHTML = h;
+}
+
+function parse(wb) {
+    let S = n => wb.Sheets[n] ? XLSX.utils.sheet_to_json(wb.Sheets[n], {defval: null}) : [];
+    let O = {};
+
+    let hcRows = S('HC');
+    hcRows.forEach(r => {
+        let email = String(r.Email || r['Email'] || '').trim().toLowerCase();
+        if (!email) return;
+        O[email] = {
+            hrid: String(r['HR ID'] || r['HR'] || ''),
+            name: String(r['Full Name'] || r['Name'] || ''),
+            email: email,
+            tl: sanitizeHierarchy(r.TL),
+            spv: sanitizeHierarchy(r.SPV || r['SPV.1']),
+            daily: {}
+        };
+    });
+
+    let rawRows = S('Raw');
+    rawRows.forEach(r => {
+        let email = String(r.agent_email || '').trim().toLowerCase();
+        if (!email) return;
+        
+        if (!O[email]) {
+            O[email] = {
+                hrid: '',
+                name: email.split('@')[0],
+                email: email,
+                tl: sanitizeHierarchy(r.TL),
+                spv: sanitizeHierarchy(r.SV),
+                daily: {}
+            };
+        }
+
+        let dtVal = r.Date;
+        let dateStr = '';
+        if (dtVal instanceof Date) {
+            dateStr = dtVal.toISOString().slice(0, 10);
+        } else if (typeof dtVal === 'string') {
+            dateStr = dtVal.slice(0, 10);
+        }
+
+        if (!dateStr) return;
+
+        if (!O[email].daily[dateStr]) {
+            O[email].daily[dateStr] = {};
+        }
+
+        let crVal = Number(r['CR%']);
+        let sopVal = Number(r['SOP%']);
+        let ahtVal = Number(r['AHT']);
+
+        if (isFinite(crVal)) O[email].daily[dateStr].cr = crVal;
+        if (isFinite(sopVal)) O[email].daily[dateStr].sop = sopVal;
+        if (isFinite(ahtVal)) O[email].daily[dateStr].aht = ahtVal;
+
+        if (O[email].tl === 'Terminated & Other' && r.TL) O[email].tl = sanitizeHierarchy(r.TL);
+        if (O[email].spv === 'Terminated & Other' && r.SV) O[email].spv = sanitizeHierarchy(r.SV);
+    });
+
+    return Object.values(O);
+}
+
+$('file').onchange = async e => {
+    let f = e.target.files[0];
+    if (!f) return;
+    let wb = XLSX.read(await f.arrayBuffer(), {type: 'array', cellDates: true});
+    DATA = parse(wb);
+    fill();
+};
+
+$('spv').onchange = tls;
+$('tl').onchange = render;
+$('q').oninput = render;
+$('reset').onclick = () => { $('q').value = ''; $('spv').value = ''; fill(); };
+
+$('detail').innerHTML = '<div class="panel empty">Upload an Excel or CSV file to begin.</div>';
+$('cards').innerHTML = '';
+$('tbl').innerHTML = '';
+$('count').textContent = '';
+</script>
+</body>
+</html>
